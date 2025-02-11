@@ -191,8 +191,8 @@ etc.) For the purposes of this project, this mechanism does not have to be
 robust to misbehaving clients.
 
 **In short:**
-**The Proxy owns and is responsbile for the the data channel (shared memory).**
-**The Cache owns and is responsbile the command channel (an IPC mechanism of your choice)**
+**The Proxy owns and is responsible for the the data channel (shared memory).**
+**The Cache owns and is responsible the command channel (an IPC mechanism of your choice)**
 
 
 Neither the cache daemon nor the proxy should crash if the other process is not
