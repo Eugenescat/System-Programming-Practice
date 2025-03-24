@@ -78,9 +78,11 @@ Your project will be graded at least on the following items:
 
 Full credit requires: code compiles successfully, does not crash, files fully transmitted, basic safety checks, and proper use of gRPC  - including the ability to get, store, delete, and list files, along with the ability to recognize a timeout. Note that the automated tests will test some of these automatically, but graders may execute additional tests of these requirements.
 
-### DFS Implementation (55 points)
+### DFS Implementation (55 points + 10 points extra credit)
 
 Full credit requires: code compiles successfully, does not crash, files fully transmitted, basic safety checks, proper use of gRPC, write locks properly handled, cache properly handled, synchronization of sync and inotify threads properly handled, and synchronization of multiple clients to a single server. Note that the automated tests will test some of these automatically, but graders may execute additional tests of these requirements.
+
+Extra Credit: In addition to the standard tests, there are 10 points of extra credit involving ensuring that multiple clients can properly sync and that inotify events are properly coordinated.
 
 ### README (10 points + 5 point extra credit opportunity)
 
