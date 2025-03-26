@@ -12,6 +12,7 @@
 
 #include "cache-student.h"
 #include "gfserver.h"
+#include "shm_channel.h"
 
 // Note that the -n and -z parameters are NOT used for Part 1 
                         
@@ -46,15 +47,28 @@ static gfserver_t gfs;
 //handles cache
 extern ssize_t handle_with_cache(gfcontext_t *ctx, char *path, void* arg);
 
+steque_t shm_pool;
+pthread_mutex_t shm_pool_lock = PTHREAD_MUTEX_INITIALIZER;
+size_t shm_segment_size;
+
+
 static void _sig_handler(int signo){
   if (signo == SIGTERM || signo == SIGINT){
     //cleanup could go here
     gfserver_stop(&gfs);
+    while (!steque_isempty(&shm_pool)) {
+      shm_segment_t *seg = steque_pop(&shm_pool);
+      shm_segment_destroy(seg);
+      free(seg);
+    }
     exit(signo);
   }
 }
 
 int main(int argc, char **argv) {
+  printf("[WEBPROXY] Started.");
+
+  fflush(stdout);
   int option_char = 0;
   char *server = "https://raw.githubusercontent.com/gt-cs6200/image_data";
   unsigned int nsegments = 8;
@@ -143,14 +157,20 @@ int main(int argc, char **argv) {
   */
   gfserver_init(&gfs, nworkerthreads);
 
+  shm_segment_size = segsize;
+  steque_init(&shm_pool);
+  create_n_segments(nsegments, segsize, &shm_pool);
+
   // Set server options here
   gfserver_setopt(&gfs, GFS_PORT, port);
   gfserver_setopt(&gfs, GFS_WORKER_FUNC, handle_with_cache);
   gfserver_setopt(&gfs, GFS_MAXNPENDING, 187);
 
-  // Set up arguments for worker here
-  for(int i = 0; i < nworkerthreads; i++) {
-    gfserver_setopt(&gfs, GFS_WORKER_ARG, i, "data");
+  // 把参数打包传进去
+  void* proxy_args[3] = { &shm_pool, &shm_segment_size, &shm_pool_lock };
+
+  for (int i = 0; i < nworkerthreads; i++) {
+      gfserver_setopt(&gfs, GFS_WORKER_ARG, i, proxy_args);
   }
   
   // Invokethe framework - this is an infinite loop and will not return
