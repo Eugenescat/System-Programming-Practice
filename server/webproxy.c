@@ -100,11 +100,11 @@ int main(int argc, char **argv) {
   gfserver_init(&gfs, nworkerthreads);
 // Set server options here
   gfserver_setopt(&gfs, GFS_MAXNPENDING, 90);
-  gfserver_setopt(&gfs, GFS_WORKER_FUNC, handle_with_file);
+  gfserver_setopt(&gfs, GFS_WORKER_FUNC, handle_with_curl);
   gfserver_setopt(&gfs, GFS_PORT, port);
   // Set up arguments for worker here
   for(i = 0; i < nworkerthreads; i++) {
-    gfserver_setopt(&gfs, GFS_WORKER_ARG, i, "arg");
+    gfserver_setopt(&gfs, GFS_WORKER_ARG, i, (void*)server);
   }
   // Invoke the framework - this is an infinite loop and shouldn't return
   gfserver_serve(&gfs);
