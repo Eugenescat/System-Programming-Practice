@@ -142,6 +142,8 @@ public:
     // You may add any additional declarations of methods or variables that you need here.
     //
 
-
+private:
+    std::mutex sync_mutex;
+    
 };
 #endif

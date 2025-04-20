@@ -3,23 +3,77 @@ syntax = "proto3";
 package dfs_service;
 
 service DFSService {
+  // 1. Store a file to the server
+  rpc StoreFile (stream StoreFileRequest) returns (StoreFileResponse);
 
-    // Add your service calls here
+  // 2. Fetch a file from the server
+  rpc FetchFile (FetchFileRequest) returns (stream FetchFileResponse);
 
-    // 1. REQUIRED (Parts 1 & 2): A method to store files on the server
+  // 3. Delete a file from the server
+  rpc DeleteFile (DeleteFileRequest) returns (DeleteFileResponse);
 
-    // 2. REQUIRED (Parts 1 & 2): A method to fetch files from the server
+  // 4. List all files on the server
+  rpc ListFiles (ListFilesRequest) returns (ListFilesResponse);
 
-    // 3. REQUIRED (Parts 1 & 2): A method to delete files from the server
-
-    // 4. REQUIRED (Parts 1 & 2): A method to list all files on the server
-
-    // 5. REQUIRED (Parts 1 & 2): A method to get the status of a file on the server
-
-    // 7. Any other methods you deem necessary to complete the tasks of this assignment
-
-
+  // 5. Get metadata of a specific file
+  rpc GetFileStatus (GetFileStatusRequest) returns (GetFileStatusResponse);
 }
 
-// Add your message types here
+// ========== Message Definitions ==========
 
+// ---- Store ----
+message StoreFileRequest {
+  string filename = 1;
+  bytes data = 2;         // file content
+}
+
+message StoreFileResponse {
+  string filename = 1;
+  int64 mtime = 2;        // modified time (epoch seconds)
+  string message = 3;
+}
+
+// ---- Fetch ----
+message FetchFileRequest {
+  string filename = 1;
+}
+
+message FetchFileResponse {
+  bytes data = 1;
+  string filename = 2;
+  int64 mtime = 3;
+}
+
+// ---- Delete ----
+message DeleteFileRequest {
+  string filename = 1;
+}
+
+message DeleteFileResponse {
+  string filename = 1;
+  string message = 2;
+}
+
+// ---- List ----
+message ListFilesRequest {}
+
+message FileMetadata {
+  string filename = 1;
+  int64 mtime = 2;
+}
+
+message ListFilesResponse {
+  repeated FileMetadata files = 1;
+}
+
+// ---- Get Status ----
+message GetFileStatusRequest {
+  string filename = 1;
+}
+
+message GetFileStatusResponse {
+  string filename = 1;
+  int64 size = 2;
+  int64 mtime = 3;
+  int64 ctime = 4;
+}

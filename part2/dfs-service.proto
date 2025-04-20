@@ -25,8 +25,99 @@ service DFSService {
 
     // 8. Any other methods you deem necessary to complete the tasks of this assignment
 
+    // Part 1 RPCs
+    rpc StoreFile (stream StoreFileRequest) returns (StoreFileResponse);
+    rpc FetchFile (FetchFileRequest) returns (stream FetchFileResponse);
+    rpc DeleteFile (DeleteFileRequest) returns (DeleteFileResponse);
+    rpc ListFiles (ListFilesRequest) returns (ListFilesResponse);
+    rpc GetFileStatus (GetFileStatusRequest) returns (GetFileStatusResponse);
+
+    // Part 2 RPCs
+    rpc RequestWriteAccess (WriteLockRequest) returns (WriteLockResponse);
+    rpc CallbackList (FileRequest) returns (FileList); // async file update trigger
 
 }
 
 // Add your message types here
 
+// ========== Message Definitions ==========
+
+// ---- Store ----
+message StoreFileRequest {
+  string filename = 1;
+  bytes data = 2;
+  string client_id = 3;
+}
+
+message StoreFileResponse {
+  string filename = 1;
+  int64 mtime = 2;
+  string message = 3;
+}
+
+// ---- Fetch ----
+message FetchFileRequest {
+  string filename = 1;
+}
+
+message FetchFileResponse {
+  bytes data = 1;
+  string filename = 2;
+  int64 mtime = 3;
+}
+
+// ---- Delete ----
+message DeleteFileRequest {
+  string filename = 1;
+  string client_id = 2;
+}
+
+message DeleteFileResponse {
+  string filename = 1;
+  string message = 2;
+}
+
+// ---- List ----
+message ListFilesRequest {}
+
+message FileMetadata {
+  string filename = 1;
+  int64 mtime = 3;
+}
+
+message ListFilesResponse {
+  repeated FileMetadata files = 1;
+}
+
+// ---- Stat ----
+message GetFileStatusRequest {
+  string filename = 1;
+}
+
+message GetFileStatusResponse {
+  string filename = 1;
+  int64 size = 2;
+  int64 mtime = 3;
+  int64 ctime = 4;
+  uint32 crc = 5;
+}
+
+// ---- Write Lock ----
+message WriteLockRequest {
+  string filename = 1;
+  string client_id = 2;
+}
+
+message WriteLockResponse {
+  bool granted = 1;
+  string message = 2;
+}
+
+// ---- Callback ----
+message FileRequest {
+  string name = 1; // ignored in this assignment
+}
+
+message FileList {
+  repeated GetFileStatusResponse files = 1;
+}

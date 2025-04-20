@@ -89,7 +89,136 @@ public:
     // implementations of your protocol service methods
     //
 
+    // 实现 StoreFile（客户端上传文件，服务端接收并写入磁盘）
+    grpc::Status StoreFile(ServerContext* context,
+        ServerReader<dfs_service::StoreFileRequest>* reader,
+        dfs_service::StoreFileResponse* response) override {
+        dfs_service::StoreFileRequest request;
+        std::ofstream outfile;
+        bool first = true;
+        std::string full_path;
 
+        while (reader->Read(&request)) {
+            if (first) {
+                full_path = WrapPath(request.filename());
+                outfile.open(full_path, std::ios::binary);
+                if (!outfile) {
+                    return grpc::Status(grpc::StatusCode::CANCELLED, "Failed to open file for writing");
+                }
+                first = false;
+            }
+            outfile.write(request.data().data(), request.data().size());
+        }
+
+        outfile.close();
+
+        struct stat st;
+        if (stat(full_path.c_str(), &st) != 0) {
+            return grpc::Status(grpc::StatusCode::CANCELLED, "Failed to stat written file");
+        }
+
+        response->set_filename(request.filename());
+        response->set_mtime(st.st_mtime);
+        response->set_message("File stored successfully");
+
+        return grpc::Status::OK;
+    }
+
+    // 实现 FetchFile（客户端请求下载，服务端分块返回）
+    grpc::Status FetchFile(ServerContext* context,
+        const dfs_service::FetchFileRequest* request,
+        ServerWriter<dfs_service::FetchFileResponse>* writer) override {
+        std::string full_path = WrapPath(request->filename());
+        std::ifstream infile(full_path, std::ios::binary);
+
+        if (!infile) {
+            return grpc::Status(grpc::StatusCode::NOT_FOUND, "File not found on server");
+        }
+
+        const size_t buffer_size = 64 * 1024;
+        char buffer[buffer_size];
+
+        while (infile) {
+            infile.read(buffer, buffer_size);
+            std::streamsize bytes_read = infile.gcount();
+            if (bytes_read <= 0) break;
+
+            dfs_service::FetchFileResponse response;
+            response.set_filename(request->filename());
+            response.set_data(buffer, bytes_read);
+            response.set_mtime(GetModifiedTime(full_path));
+            writer->Write(response);
+        }
+
+        return grpc::Status::OK;
+    }
+
+    int64_t GetModifiedTime(const std::string& path) {
+        struct stat st;
+        if (stat(path.c_str(), &st) == 0) {
+            return st.st_mtime;
+        }
+        return 0;
+    }
+    
+    grpc::Status DeleteFile(ServerContext* context,
+        const dfs_service::DeleteFileRequest* request,
+        dfs_service::DeleteFileResponse* response) override {
+        std::string full_path = WrapPath(request->filename());
+
+        if (std::remove(full_path.c_str()) != 0) {
+            if (errno == ENOENT)
+                return grpc::Status(grpc::StatusCode::NOT_FOUND, "File not found");
+            return grpc::Status(grpc::StatusCode::CANCELLED, "File delete failed");
+        }
+
+        response->set_filename(request->filename());
+        response->set_message("File deleted successfully");
+        return grpc::Status::OK;
+    }
+
+    // 获取服务器上所有文件及其修改时间
+    grpc::Status ListFiles(ServerContext* context,
+        const dfs_service::ListFilesRequest* request,
+        dfs_service::ListFilesResponse* response) override {
+        DIR* dir = opendir(this->mount_path.c_str());
+        if (!dir) {
+            return grpc::Status(grpc::StatusCode::CANCELLED, "Failed to open directory");
+        }
+
+        struct dirent* entry;
+        while ((entry = readdir(dir)) != nullptr) {
+            if (entry->d_type == DT_REG) {
+                std::string filename(entry->d_name);
+                std::string full_path = WrapPath(filename);
+
+                dfs_service::FileMetadata meta;
+                meta.set_filename(filename);
+                meta.set_mtime(GetModifiedTime(full_path));
+                response->add_files()->CopyFrom(meta);
+            }
+        }
+        closedir(dir);
+        return grpc::Status::OK;
+    }
+
+    // 获取某个文件的大小、修改时间和创建时间
+    grpc::Status GetFileStatus(ServerContext* context,
+        const dfs_service::GetFileStatusRequest* request,
+        dfs_service::GetFileStatusResponse* response) override {
+        std::string full_path = WrapPath(request->filename());
+
+        struct stat st;
+        if (stat(full_path.c_str(), &st) != 0) {
+            return grpc::Status(grpc::StatusCode::NOT_FOUND, "File not found");
+        }
+
+        response->set_filename(request->filename());
+        response->set_size(st.st_size);
+        response->set_mtime(st.st_mtime);
+        response->set_ctime(st.st_ctime);
+        return grpc::Status::OK;
+    }
 };
 
 //

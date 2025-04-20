@@ -30,6 +30,7 @@ using grpc::ServerBuilder;
 using dfs_service::DFSService;
 
 
+
 //
 // STUDENT INSTRUCTION:
 //
@@ -37,8 +38,8 @@ using dfs_service::DFSService;
 // message types you are using in your `dfs-service.proto` file
 // to indicate a file request and a listing of files from the server
 //
-using FileRequestType = FileRequest;
-using FileListResponseType = FileList;
+using FileRequestType = dfs_service::FileRequest;
+using FileListResponseType = dfs_service::FileList;
 
 extern dfs_log_level_e DFS_LOG_LEVEL;
 
@@ -83,6 +84,11 @@ private:
 
     /** The vector of queued tags used to manage asynchronous requests **/
     std::vector<QueueRequest<FileRequestType, FileListResponseType>> queued_tags;
+
+    /** Mutex for managing file write locks **/
+    std::map<std::string, std::string> file_write_locks; // filename -> client_id
+    std::mutex lock_mutex;
+
 
 
     /**
@@ -168,6 +174,26 @@ public:
         // is aware of. The client will then need to make the appropriate calls based on those changes.
         //
 
+        DIR* dir = opendir(this->mount_path.c_str());
+        if (!dir) return;
+    
+        struct dirent* entry;
+        while ((entry = readdir(dir)) != nullptr) {
+            if (entry->d_type == DT_REG) {
+                std::string filename(entry->d_name);
+                std::string full_path = WrapPath(filename);
+    
+                // 构造GetFileStatusResponse
+                dfs_service::GetFileStatusResponse stat;
+                stat.set_filename(filename);
+                stat.set_mtime(GetModifiedTime(full_path));
+                stat.set_crc(dfs_file_checksum(full_path, &this->crc_table));
+                response->add_files()->CopyFrom(stat);
+            }
+        }
+    
+        closedir(dir);
+
     }
 
     /**
@@ -216,6 +242,196 @@ public:
     // Add your additional code here, including
     // the implementations of your rpc protocol methods.
     //
+    grpc::Status RequestWriteAccess(ServerContext* context,
+        const dfs_service::WriteLockRequest* request,
+        dfs_service::WriteLockResponse* response) {
+    
+        std::lock_guard<std::mutex> guard(lock_mutex);
+    
+        const std::string& filename = request->filename();
+        const std::string& client_id = request->client_id();
+    
+        if (file_write_locks.count(filename) == 0 || file_write_locks[filename] == client_id) {
+            file_write_locks[filename] = client_id;
+            response->set_granted(true);
+            response->set_message("Lock granted.");
+            return grpc::Status::OK;
+        } else {
+            response->set_granted(false);
+            response->set_message("Another client holds the lock.");
+            return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED, "Lock held by another client");
+        }
+    }
+
+    
+    // 实现 StoreFile（客户端上传文件，服务端接收并写入磁盘）
+    grpc::Status StoreFile(ServerContext* context,
+        ServerReader<dfs_service::StoreFileRequest>* reader,
+        dfs_service::StoreFileResponse* response) override {
+
+        dfs_service::StoreFileRequest request;
+        std::ofstream outfile;
+        bool first = true;
+        std::string full_path;
+        std::string filename;
+        std::string client_id;
+
+        while (reader->Read(&request)) {
+            if (first) {
+
+                // Before opening file for writing
+                filename = request.filename();
+                client_id = request.client_id();
+                {
+                    std::lock_guard<std::mutex> lock(lock_mutex);
+                    if (file_write_locks[filename] != client_id) {
+                        return grpc::Status(grpc::StatusCode::PERMISSION_DENIED, "Client does not hold write lock");
+                    }
+                }
+
+                full_path = WrapPath(request.filename());
+                outfile.open(full_path, std::ios::binary);
+                if (!outfile) {
+                    return grpc::Status(grpc::StatusCode::CANCELLED, "Failed to open file for writing");
+                }
+                first = false;
+            }
+            outfile.write(request.data().data(), request.data().size());
+        }
+
+        outfile.close();
+
+        struct stat st;
+        if (stat(full_path.c_str(), &st) != 0) {
+            return grpc::Status(grpc::StatusCode::CANCELLED, "Failed to stat written file");
+        }
+
+        response->set_filename(request.filename());
+        response->set_mtime(st.st_mtime);
+        response->set_message("File stored successfully");
+
+        {
+            std::lock_guard<std::mutex> lock(lock_mutex);
+            file_write_locks.erase(filename); // 释放锁
+        }
+
+        return grpc::Status::OK;
+    }
+
+    // 实现 FetchFile（客户端请求下载，服务端分块返回）
+    grpc::Status FetchFile(ServerContext* context,
+        const dfs_service::FetchFileRequest* request,
+        ServerWriter<dfs_service::FetchFileResponse>* writer) override {
+        std::string full_path = WrapPath(request->filename());
+        std::ifstream infile(full_path, std::ios::binary);
+
+        if (!infile) {
+            return grpc::Status(grpc::StatusCode::NOT_FOUND, "File not found on server");
+        }
+
+        const size_t buffer_size = 64 * 1024;
+        char buffer[buffer_size];
+
+        while (infile) {
+            infile.read(buffer, buffer_size);
+            std::streamsize bytes_read = infile.gcount();
+            if (bytes_read <= 0) break;
+
+            dfs_service::FetchFileResponse response;
+            response.set_filename(request->filename());
+            response.set_data(buffer, bytes_read);
+            response.set_mtime(GetModifiedTime(full_path));
+            writer->Write(response);
+        }
+
+        return grpc::Status::OK;
+    }
+
+    int64_t GetModifiedTime(const std::string& path) {
+        struct stat st;
+        if (stat(path.c_str(), &st) == 0) {
+            return st.st_mtime;
+        }
+        return 0;
+    }
+    
+    grpc::Status DeleteFile(ServerContext* context,
+        const dfs_service::DeleteFileRequest* request,
+        dfs_service::DeleteFileResponse* response) override {
+
+        const std::string& filename = request->filename();
+        const std::string& client_id = request->client_id();
+
+        std::string full_path = WrapPath(filename);
+
+        {
+            std::lock_guard<std::mutex> lock(lock_mutex);
+            if (file_write_locks[filename] != client_id) {
+                return grpc::Status(grpc::StatusCode::PERMISSION_DENIED, "Client does not hold write lock");
+            }
+        }
+
+        if (std::remove(full_path.c_str()) != 0) {
+            if (errno == ENOENT)
+                return grpc::Status(grpc::StatusCode::NOT_FOUND, "File not found");
+            return grpc::Status(grpc::StatusCode::CANCELLED, "File delete failed");
+        }
+
+        response->set_filename(request->filename());
+        response->set_message("File deleted successfully");
+
+        {
+            std::lock_guard<std::mutex> lock(lock_mutex);
+            file_write_locks.erase(filename);
+        }
+
+        return grpc::Status::OK;
+    }
+
+    // 获取服务器上所有文件及其修改时间
+    grpc::Status ListFiles(ServerContext* context,
+        const dfs_service::ListFilesRequest* request,
+        dfs_service::ListFilesResponse* response) override {
+        DIR* dir = opendir(this->mount_path.c_str());
+        if (!dir) {
+            return grpc::Status(grpc::StatusCode::CANCELLED, "Failed to open directory");
+        }
+
+        struct dirent* entry;
+        while ((entry = readdir(dir)) != nullptr) {
+            if (entry->d_type == DT_REG) {
+                std::string filename(entry->d_name);
+                std::string full_path = WrapPath(filename);
+
+                dfs_service::FileMetadata meta;
+                meta.set_filename(filename);
+                meta.set_mtime(GetModifiedTime(full_path));
+                response->add_files()->CopyFrom(meta);
+            }
+        }
+        closedir(dir);
+        return grpc::Status::OK;
+    }
+
+    // 获取某个文件的大小、修改时间、创建时间和CRC
+    grpc::Status GetFileStatus(ServerContext* context,
+        const dfs_service::GetFileStatusRequest* request,
+        dfs_service::GetFileStatusResponse* response) override {
+        std::string full_path = WrapPath(request->filename());
+
+        struct stat st;
+        if (stat(full_path.c_str(), &st) != 0) {
+            return grpc::Status(grpc::StatusCode::NOT_FOUND, "File not found");
+        }
+
+        response->set_filename(request->filename());
+        response->set_size(st.st_size);
+        response->set_mtime(st.st_mtime);
+        response->set_ctime(st.st_ctime);
+        response->set_crc(dfs_file_checksum(full_path, &this->crc_table));
+        return grpc::Status::OK;
+    }
+    
 
 
 };
