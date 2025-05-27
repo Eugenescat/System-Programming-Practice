@@ -1,3 +1,43 @@
+#  Project Overview
+Description 
+● Clearly demonstrates your understanding of what you did and why - we want to see your design and your explanation of the choices that you made and why you made those choices. (4 points) 
+
+(A) Basically, I fulfill the following functions: Server Side: StoreFile, FetchFile, GetModifiedTime, DeleteFile, ListFiles, GetFileStatus Client Side: Store, Fetch, Delete, List, Stat Store can send the local file chunk to the DFS server and streaming upload using GRPC ClientWriter. Fetch can reads the file in chunks from the server and writes it to the local disk and streaming downloads with gRPC ClientReader. I define GetFileStatusResponse for Stat, which includes: filename, mtime and crc. When client call Store and Fetch, it will firstly call Stat to check if the file on server has the same crc as the local file. This can save time and avoid repeated store or fetch actions. To prevent indefinite blocking during RPC calls to the server, I implemented timeout control using grpc::ClientContext::set_deadline(). In protos, it’s defined as: rpc StoreFile (stream StoreFileRequest) returns (StoreFileResponse); rpc FetchFile (FetchFileRequest) returns (stream FetchFileResponse); rpc DeleteFile (DeleteFileRequest) returns (DeleteFileResponse); rpc ListFiles (ListFilesRequest) returns (ListFilesResponse); rpc GetFileStatus (GetFileStatusRequest) returns (GetFileStatusResponse);
+
+(B) For One Creator/Writer per File, I implement RequestWriteAccess() for both Server Side and Client Side. When a client calls Store/Delete, Server Side should requires std::map<std::string, std::string> file_write_locks; // filename -> client_id this file_write_locks, if the same file lock is hold by another client, this client cannot Store/Delete this file on server. In protos, it’s defined as: rpc RequestWriteAccess (WriteLockRequest) returns (WriteLockResponse); 
+
+(C) For Synchronized Clients and Server: To avoid a race condition between the async thread and the file watcher thread, I provide a std::lock_guard<std::mutex> guard(sync_mutex);at the beginning of HandleCallbackList() and InotifyWatcherCallback(). When ProcessCallBack() is called, it will construct a list of GetFileStatusResponse, including each file’s filename, mtime and crc, for HandleCallbackList() to use. In protos, it’s defines as: rpc CallbackList (FileRequest) returns (FileList); 
+
+(D) To secure Date based Sequences, inside HandleCallbackList(), it check as the following logic: if server file mtime is smaller than client file, store client file; if server file mtime is larger than or equal to client file, fetch server file; if server file doesn’t exist on local, fetch server file; (This file comes from another client) if local file doesn’t exist on server, delete local files. (If it happens when client makes a new file and notify server, afterwards a new server ProcessCallBack() will make this client fetch this file) 
+
+● A description of the flow of control for your code; we strongly suggest that you use graphics here, but a thorough textual explanation is sufficient. (2 points)
+
+# flowchart
+A[Client starts DFSClientNodeP2] --> B[InitCallbackList(): Registers async update listener with server]
+B --> C[HandleCallbackList(): Receives async update from server]
+C --> D{Should synchronize? Compare with server via Stat + CRC}
+D -->|Server file is newer| E[Fetch: Download updated file]
+D -->|Local file is newer| F[Store: Upload local file]
+F --> G[RequestWriteAccess: Ask server for write lock]
+G --> H{Lock granted?}
+H -->|Yes| I[Store: Stream file to server]
+H -->|No| J[Cancel upload, wait for retry]
+Inotify Watcher
+K[Local file modified → Inotify triggers callback]
+K --> L[Call Store to upload]
+L --> G
+end
+
+● A brief explanation of how you implemented and tested your code. (2 points) 
+Operate the file in two clients, observe whether the write lock is valid; modify the local file can trigger upload; server file changes can download correctly; delete file is synchronized to the other client. 
+● References any external materials that you consulted during your development process (2 points) 
+Slack. Piazza. P4L1 Remote Procedure Calls. gRPC C++ Examples. 
+● Suggestions on how you would improve the documentation, sample code, testing, or other aspects of the project (up to 5 points extra credit available for noteworthy suggestions here, e.g., actual descriptions of how you would change things, sample code, code for tests, etc.) We do not give extra credit for simply reporting an issue - we're looking for actionable suggestions on how to improve things. 
+Provides a test.sh script that automatically emulates the behavior of synchronization between clients. Maintain a deleted_list on server to double check if a local file not existing on server should be deleted locally or Store to server.
+
+
+# Requirements: 
+
 # GRPC and Distributed Systems
 
 ## Foreward
